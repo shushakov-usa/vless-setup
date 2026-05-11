@@ -545,7 +545,8 @@ EOF
 restart_marzban_and_wait() {
   log "Restarting Marzban + waiting for API"
   local restart_log="/root/${SCRIPT_NAME}-marzban-restart.log"
-  if ! marzban restart >"$restart_log" 2>&1; then
+  # -n / --no-logs: don't follow docker compose logs forever after restart.
+  if ! marzban restart -n >"$restart_log" 2>&1; then
     err "'marzban restart' returned non-zero. Output:"
     tail -n 40 "$restart_log" >&2
     die "Restart failed. Full log: $restart_log"
@@ -564,8 +565,8 @@ restart_marzban_and_wait() {
   err "Marzban API did not respond on https://127.0.0.1:${PANEL_PORT}${PANEL_PATH}/api/admin/token within 60s."
   err "Last curl output:"
   echo "$last_curl" >&2
-  err "Tail of 'marzban logs' (last 30 lines):"
-  marzban logs 2>&1 | tail -n 30 >&2 || true
+  err "Tail of 'marzban logs --no-follow' (last 30 lines):"
+  marzban logs -n 2>&1 | tail -n 30 >&2 || true
   die "API never came up. See above; also check: marzban logs, /opt/marzban/.env, container status (docker ps)"
 }
 
