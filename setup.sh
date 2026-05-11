@@ -17,7 +17,7 @@ CERT_DIR="/etc/marzban-cert"
 CERT_FILE="${CERT_DIR}/server.crt"
 KEY_FILE="${CERT_DIR}/server.key"
 OUTPUT_FILE="/root/${SCRIPT_NAME}-output.txt"
-REALITLSCANNER_URL="https://github.com/XTLS/RealiTLScanner/releases/latest/download/RealiTLScanner-linux-amd64"
+REALITLSCANNER_URL="https://github.com/XTLS/RealiTLScanner/releases/latest/download/RealiTLScanner-linux-64"
 REALITLSCANNER_BIN="/usr/local/bin/RealiTLScanner"
 
 # Allowed CDN cert issuers — sites with these issuers are de-facto allowlisted in RU.
@@ -65,13 +65,21 @@ err()   { echo "${C_RED}  ✗${C_RESET} $*" >&2; }
 die()   { err "$*"; exit 1; }
 ask()   { local prompt="$1" default="${2-}" reply
           if [[ -n "$default" ]]; then
-            read -rp "  ${prompt} [${C_DIM}${default}${C_RESET}]: " reply
+            read -rp "  ${prompt} [${C_DIM}${default}${C_RESET}]: " reply </dev/tty
             echo "${reply:-$default}"
           else
-            read -rp "  ${prompt}: " reply
+            read -rp "  ${prompt}: " reply </dev/tty
             echo "$reply"
           fi
         }
+ask_secret() { local prompt="$1" default="${2-}" reply
+               if [[ -n "$default" ]]; then
+                 read -rsp "  ${prompt} [random]: " reply </dev/tty; echo >&2
+               else
+                 read -rsp "  ${prompt}: " reply </dev/tty; echo >&2
+               fi
+               echo "${reply:-$default}"
+             }
 ask_yn() { local prompt="$1" default="${2:-Y}" reply
            local hint="[Y/n]"; [[ "$default" =~ ^[Nn]$ ]] && hint="[y/N]"
            read -rp "  ${prompt} ${hint} " reply
@@ -167,7 +175,7 @@ prompt_panel_settings() {
   local default_port=8000
 
   ADMIN_USER="$(ask "Admin username" "$default_user")"
-  ADMIN_PASS="$(ask "Admin password" "$default_pass")"
+  ADMIN_PASS="$(ask_secret "Admin password" "$default_pass")"
   PANEL_PATH="$(ask "Panel base path (leading slash)" "$default_path")"
   PANEL_PORT="$(ask "Panel port" "$default_port")"
 
