@@ -364,13 +364,50 @@ generate_self_signed_cert() {
 # ──────────────────────────────────────────────────────────────────────────
 install_marzban() {
   log "Installing Marzban (this can take a few minutes)"
+  # The upstream installer ends with `docker compose logs -f`, which never returns.
+  # Stream its output to a file, watch for the startup-complete line, then kill
+  # the entire process group (installer + child docker-compose-logs).
   local log_file="/root/${SCRIPT_NAME}-marzban-install.log"
-  if ! bash -c "$(curl -sL https://github.com/Gozargah/Marzban-scripts/raw/master/marzban.sh)" @ install >"$log_file" 2>&1; then
-    err "Marzban installer failed. Last 30 lines of $log_file:"
+  local installer_src
+  installer_src="$(curl -sL https://github.com/Gozargah/Marzban-scripts/raw/master/marzban.sh)"
+  [[ -n "$installer_src" ]] || die "Could not fetch Marzban installer."
+
+  : >"$log_file"
+  setsid bash -c "$installer_src" @ install >>"$log_file" 2>&1 &
+  local pid=$!
+  local pgid
+  pgid="$(ps -o pgid= "$pid" 2>/dev/null | tr -d ' ')"
+  pgid="${pgid:-$pid}"
+
+  local waited=0
+  local deadline=600   # 10 minutes; covers slow apt/docker pulls
+  while (( waited < deadline )); do
+    if grep -q "Application startup complete" "$log_file" 2>/dev/null; then
+      ok "Marzban application startup complete"
+      kill -TERM "-$pgid" 2>/dev/null || true
+      sleep 2
+      kill -KILL "-$pgid" 2>/dev/null || true
+      break
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      err "Marzban installer exited before startup. Last 30 lines of $log_file:"
+      tail -n 30 "$log_file" >&2
+      die "See full log at $log_file"
+    fi
+    sleep 2
+    waited=$((waited + 2))
+  done
+
+  if (( waited >= deadline )); then
+    kill -KILL "-$pgid" 2>/dev/null || true
+    err "Timed out waiting for Marzban startup. Last 30 lines of $log_file:"
     tail -n 30 "$log_file" >&2
     die "See full log at $log_file"
   fi
+
   command -v marzban >/dev/null || die "Marzban CLI not found after install. See $log_file"
+  docker ps --format '{{.Names}}' | grep -q '^marzban-marzban-1$' \
+    || die "marzban container is not running. See $log_file"
   ok "Marzban installed (full log: $log_file)"
 }
 
