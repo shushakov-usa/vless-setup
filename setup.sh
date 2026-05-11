@@ -13,7 +13,11 @@ SCRIPT_NAME="vless-setup"
 MARZBAN_DIR="/opt/marzban"
 MARZBAN_ENV="${MARZBAN_DIR}/.env"
 MARZBAN_XRAY_JSON="/var/lib/marzban/xray_config.json"  # inside compose's volume mount
-CERT_DIR="/etc/marzban-cert"
+# Cert lives under /var/lib/marzban so the Marzban container sees it through the
+# host-mounted volume (compose mounts /var/lib/marzban:/var/lib/marzban). Anywhere
+# else, uvicorn raises FileNotFoundError loading the SSL cert, main.py's bare
+# `except FileNotFoundError: pass` swallows it, container exits 0, restarts forever.
+CERT_DIR="/var/lib/marzban/cert"
 CERT_FILE="${CERT_DIR}/server.crt"
 KEY_FILE="${CERT_DIR}/server.key"
 OUTPUT_FILE="/root/${SCRIPT_NAME}-output.txt"
