@@ -570,8 +570,26 @@ restart_marzban_and_wait() {
   err "Marzban API did not respond on https://127.0.0.1:${PANEL_PORT}${PANEL_PATH}/api/admin/token within 60s."
   err "Last curl output:"
   echo "$last_curl" >&2
-  err "Tail of 'marzban logs --no-follow' (last 30 lines):"
-  marzban logs -n 2>&1 | tail -n 30 >&2 || true
+
+  local logs_dump
+  logs_dump="$(marzban logs -n 2>&1 || true)"
+
+  # Surface real failures first — the "IMPORTANT! self-signed CA" banner spams the tail
+  # on a crash loop, hiding the underlying error.
+  err "Errors / tracebacks in 'marzban logs -n':"
+  echo "$logs_dump" | grep -iE 'error|traceback|exception|fail|cannot|refused|invalid|panic' \
+    | tail -n 30 >&2 || true
+
+  err "Container restart count:"
+  docker inspect -f '{{.RestartCount}}' marzban-marzban-1 2>&1 >&2 || true
+
+  # Validate the xray config we just wrote (most likely culprit when our changes broke startup)
+  err "Validating /var/lib/marzban/xray_config.json with xray -test:"
+  docker exec marzban-marzban-1 xray -test -config /var/lib/marzban/xray_config.json 2>&1 \
+    | tail -n 20 >&2 || true
+
+  err "Last 60 lines of 'marzban logs -n' (raw):"
+  echo "$logs_dump" | tail -n 60 >&2
   die "API never came up. See above; also check: marzban logs, /opt/marzban/.env, container status (docker ps)"
 }
 
