@@ -204,12 +204,26 @@ prompt_clients() {
 
 prompt_ssh_keys() {
   log "SSH key bootstrap"
-  echo "  Paste your SSH public key(s), one per line. Press Ctrl-D when done."
-  echo "  (Leave empty + Ctrl-D to skip; SSH hardening will then be skipped too.)"
-  local pasted
-  pasted="$(cat)"
   mkdir -p /root/.ssh && chmod 700 /root/.ssh
   touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
+
+  # If authorized_keys already has content, skip the paste prompt by default.
+  if [[ -s /root/.ssh/authorized_keys ]]; then
+    local n
+    n="$(grep -cE '^[^#[:space:]]' /root/.ssh/authorized_keys 2>/dev/null || echo 0)"
+    ok "Found ${n} existing key(s) in /root/.ssh/authorized_keys:"
+    ssh-keygen -l -f /root/.ssh/authorized_keys 2>/dev/null \
+      | sed 's/^/    /' >&2 || true
+    if ! ask_yn "Add more SSH keys?" "N"; then
+      ok "Keeping existing keys; SSH hardening will proceed"
+      return 0
+    fi
+  fi
+
+  echo "  Paste your SSH public key(s), one per line. Press Ctrl-D when done."
+  echo "  (Leave empty + Ctrl-D to skip; SSH hardening will be skipped if authorized_keys ends up empty.)"
+  local pasted
+  pasted="$(cat </dev/tty)"
   local added=0
   while IFS= read -r line; do
     [[ -z "${line// }" ]] && continue
@@ -221,9 +235,9 @@ prompt_ssh_keys() {
   if (( added > 0 )); then
     ok "Added $added new SSH key(s)"
   elif [[ -s /root/.ssh/authorized_keys ]]; then
-    ok "authorized_keys already populated; no new keys added"
+    ok "No new keys added; existing authorized_keys preserved"
   else
-    warn "No SSH keys provided and authorized_keys is empty."
+    warn "No SSH keys provided and authorized_keys is empty — SSH hardening will be skipped."
   fi
 }
 
