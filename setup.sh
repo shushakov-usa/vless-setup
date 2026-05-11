@@ -364,10 +364,14 @@ generate_self_signed_cert() {
 # ──────────────────────────────────────────────────────────────────────────
 install_marzban() {
   log "Installing Marzban (this can take a few minutes)"
-  bash -c "$(curl -sL https://github.com/Gozargah/Marzban-scripts/raw/master/marzban.sh)" @ install >/dev/null 2>&1 \
-    || die "Marzban installer failed."
-  command -v marzban >/dev/null || die "Marzban CLI not found after install."
-  ok "Marzban installed"
+  local log_file="/root/${SCRIPT_NAME}-marzban-install.log"
+  if ! bash -c "$(curl -sL https://github.com/Gozargah/Marzban-scripts/raw/master/marzban.sh)" @ install >"$log_file" 2>&1; then
+    err "Marzban installer failed. Last 30 lines of $log_file:"
+    tail -n 30 "$log_file" >&2
+    die "See full log at $log_file"
+  fi
+  command -v marzban >/dev/null || die "Marzban CLI not found after install. See $log_file"
+  ok "Marzban installed (full log: $log_file)"
 }
 
 write_env() {
