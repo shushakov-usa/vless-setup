@@ -533,6 +533,12 @@ write_xray_config() {
           "acceptProxyProtocol": false,
           "header": { "type": "none" }
         },
+        "sockopt": {
+          "tcpKeepAliveInterval": 15,
+          "tcpKeepAliveIdle": 15,
+          "tcpNoDelay": true,
+          "tcpMptcp": false
+        },
         "realitySettings": {
           "show": false,
           "dest": "${REALITY_SNI}:443",
@@ -705,6 +711,27 @@ configure_firewall() {
 }
 
 # ──────────────────────────────────────────────────────────────────────────
+# Network tuning — keep proxied flows alive through stateful middleboxes
+# ──────────────────────────────────────────────────────────────────────────
+tune_tcp_keepalive() {
+  log "Writing /etc/sysctl.d/99-vless-keepalive.conf"
+  # Many provider / ISP middleboxes drop idle TCP flows after ~20–60s. Default
+  # tcp_keepalive_time=7200 means the kernel never refreshes those flows in
+  # time, so long-lived vless connections (chat streaming, big downloads,
+  # WebSocket) die silently around the 20-second mark. Tighten the timers so
+  # the kernel emits a keepalive within 15s of inactivity.
+  cat > /etc/sysctl.d/99-vless-keepalive.conf <<'EOF'
+# vless-setup: aggressive TCP keepalives so stateful firewalls
+# (provider / ISP middleboxes) do not drop idle proxied flows.
+net.ipv4.tcp_keepalive_time = 15
+net.ipv4.tcp_keepalive_intvl = 5
+net.ipv4.tcp_keepalive_probes = 3
+EOF
+  sysctl --system >/dev/null 2>&1 || warn "sysctl --system returned non-zero; values may not be applied until reboot."
+  ok "TCP keepalive tightened (time=15s intvl=5s probes=3)"
+}
+
+# ──────────────────────────────────────────────────────────────────────────
 # SSH hardening + fail2ban
 # ──────────────────────────────────────────────────────────────────────────
 harden_ssh() {
@@ -863,6 +890,7 @@ main() {
   restart_marzban_and_wait
   create_clients
   configure_firewall
+  tune_tcp_keepalive
   harden_ssh
   if ask_yn "Install extras (zsh+omz, vim, tmux, htop, ripgrep/fd/bat/fzf, Node LTS, Codex/Claude/Copilot CLIs)?" "Y"; then
     install_extras
