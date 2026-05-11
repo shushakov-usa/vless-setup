@@ -354,10 +354,17 @@ select_reality_sni() {
 generate_self_signed_cert() {
   log "Generating self-signed panel certificate"
   mkdir -p "$CERT_DIR"
-  openssl req -x509 -newkey rsa:2048 -days 3650 -nodes \
-    -subj "/CN=${SERVER_IP}" \
-    -addext "subjectAltName=IP:${SERVER_IP}" \
-    -keyout "$KEY_FILE" -out "$CERT_FILE" >/dev/null 2>&1
+  local out
+  if ! out="$(openssl req -x509 -newkey rsa:2048 -days 3650 -nodes \
+        -subj "/CN=${SERVER_IP}" \
+        -addext "subjectAltName=IP:${SERVER_IP}" \
+        -keyout "$KEY_FILE" -out "$CERT_FILE" 2>&1)"; then
+    err "openssl req failed. Output:"
+    echo "$out" >&2
+    die "Could not generate self-signed certificate at $CERT_FILE"
+  fi
+  [[ -s "$CERT_FILE" && -s "$KEY_FILE" ]] \
+    || die "openssl reported success but cert/key file is empty: $CERT_FILE / $KEY_FILE"
   chmod 600 "$KEY_FILE"
   ok "Cert at $CERT_FILE"
 }
@@ -442,13 +449,29 @@ EOF
 
 generate_reality_keys() {
   log "Generating Reality x25519 keys + short IDs"
-  # Use the xray binary inside the marzban container
-  local kp
-  kp="$(docker exec marzban-marzban-1 xray x25519 2>/dev/null)" \
-    || die "Could not exec xray inside Marzban container."
-  REALITY_PRIVATE_KEY="$(echo "$kp" | awk -F': ' '/^PrivateKey/{print $2}')"
-  REALITY_PUBLIC_KEY="$(echo "$kp"  | awk -F': ' '/^Password/{print $2}')"
-  [[ -n "$REALITY_PRIVATE_KEY" && -n "$REALITY_PUBLIC_KEY" ]] || die "Failed to parse xray keypair."
+  # Xray output format (v24.x):
+  #   Private key: <base64>
+  #   Public key:  <base64>
+  # (older versions emitted "PrivateKey:" / "Password:" — both are tried below.)
+  local kp kp_err
+  kp_err="$(mktemp)"
+  if ! kp="$(docker exec marzban-marzban-1 xray x25519 2>"$kp_err")"; then
+    err "docker exec xray x25519 failed. stderr:"
+    cat "$kp_err" >&2
+    rm -f "$kp_err"
+    die "Could not exec xray inside Marzban container (is container running? docker ps)"
+  fi
+  rm -f "$kp_err"
+
+  REALITY_PRIVATE_KEY="$(echo "$kp" | awk -F': *' '/^(Private key|PrivateKey)/{print $2; exit}')"
+  REALITY_PUBLIC_KEY="$(echo "$kp"  | awk -F': *' '/^(Public key|Password)/{print $2; exit}')"
+  if [[ -z "$REALITY_PRIVATE_KEY" || -z "$REALITY_PUBLIC_KEY" ]]; then
+    err "Could not parse 'xray x25519' output. Raw output was:"
+    echo "----- xray x25519 stdout -----" >&2
+    echo "$kp" >&2
+    echo "------------------------------" >&2
+    die "Expected lines starting with 'Private key:' and 'Public key:' (or legacy 'PrivateKey:'/'Password:')"
+  fi
   REALITY_SHORT_IDS=()
   for n in 2 4 6 8 10 12 14 16; do
     REALITY_SHORT_IDS+=("$(openssl rand -hex $((n/2)))")
@@ -507,34 +530,52 @@ EOF
 
 restart_marzban_and_wait() {
   log "Restarting Marzban + waiting for API"
-  marzban restart >/dev/null 2>&1
-  local i
+  local restart_log="/root/${SCRIPT_NAME}-marzban-restart.log"
+  if ! marzban restart >"$restart_log" 2>&1; then
+    err "'marzban restart' returned non-zero. Output:"
+    tail -n 40 "$restart_log" >&2
+    die "Restart failed. Full log: $restart_log"
+  fi
+  local i last_curl=""
   for i in $(seq 1 30); do
-    if curl -sk --max-time 2 "https://127.0.0.1:${PANEL_PORT}${PANEL_PATH}/api/admin/token" \
-         -d "username=${ADMIN_USER}&password=${ADMIN_PASS}" 2>/dev/null \
-         | grep -q access_token; then
+    last_curl="$(curl -sk --max-time 2 -w $'\nHTTP_CODE:%{http_code}\n' \
+                  "https://127.0.0.1:${PANEL_PORT}${PANEL_PATH}/api/admin/token" \
+                  -d "username=${ADMIN_USER}&password=${ADMIN_PASS}" 2>&1)" || true
+    if echo "$last_curl" | grep -q access_token; then
       ok "Marzban API responsive (attempt $i)"
       return 0
     fi
     sleep 2
   done
-  die "Marzban API did not come up within 60s. Check: marzban logs"
+  err "Marzban API did not respond on https://127.0.0.1:${PANEL_PORT}${PANEL_PATH}/api/admin/token within 60s."
+  err "Last curl output:"
+  echo "$last_curl" >&2
+  err "Tail of 'marzban logs' (last 30 lines):"
+  marzban logs 2>&1 | tail -n 30 >&2 || true
+  die "API never came up. See above; also check: marzban logs, /opt/marzban/.env, container status (docker ps)"
 }
 
 # ──────────────────────────────────────────────────────────────────────────
 # Client creation via Marzban HTTP API
 # ──────────────────────────────────────────────────────────────────────────
 api_token() {
+  # Returns the raw JSON response on stdout (caller parses); stderr passes through.
   curl -sk -X POST "https://127.0.0.1:${PANEL_PORT}${PANEL_PATH}/api/admin/token" \
-    -d "username=${ADMIN_USER}&password=${ADMIN_PASS}" \
-    | jq -r '.access_token'
+    -d "username=${ADMIN_USER}&password=${ADMIN_PASS}"
 }
 
 create_clients() {
   log "Creating ${#CLIENT_NAMES[@]} client(s) via Marzban API"
-  local token
-  token="$(api_token)"
-  [[ -n "$token" && "$token" != "null" ]] || die "Could not obtain admin token."
+  local token_resp token
+  token_resp="$(api_token)"
+  token="$(echo "$token_resp" | jq -r '.access_token // empty' 2>/dev/null)"
+  if [[ -z "$token" || "$token" == "null" ]]; then
+    err "Could not obtain admin token from https://127.0.0.1:${PANEL_PORT}${PANEL_PATH}/api/admin/token"
+    err "Username used: ${ADMIN_USER}"
+    err "Raw response from Marzban:"
+    echo "$token_resp" >&2
+    die "Auth to Marzban API failed. Check ADMIN_USER/ADMIN_PASS in /opt/marzban/.env match what was prompted; check that the panel path '${PANEL_PATH}' matches DASHBOARD_PATH in .env."
+  fi
 
   for name in "${CLIENT_NAMES[@]}"; do
     local body
@@ -748,7 +789,8 @@ main() {
     REALITY_SNI="$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' "$MARZBAN_XRAY_JSON")"
     REALITY_PRIVATE_KEY="$(jq -r '.inbounds[0].streamSettings.realitySettings.privateKey' "$MARZBAN_XRAY_JSON")"
     REALITY_PUBLIC_KEY="$(docker exec marzban-marzban-1 xray x25519 -i "$REALITY_PRIVATE_KEY" 2>/dev/null \
-                            | awk -F': ' '/^Password/{print $2}')"
+                            | awk -F': *' '/^(Public key|Password)/{print $2; exit}')"
+    [[ -n "$REALITY_PUBLIC_KEY" ]] || die "Failed to derive public key from existing private key (xray x25519 -i produced no parseable output)."
     mapfile -t REALITY_SHORT_IDS < <(jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[]' "$MARZBAN_XRAY_JSON")
     prompt_clients
     create_clients
