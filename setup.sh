@@ -28,11 +28,16 @@ REALITLSCANNER_BIN="/usr/local/bin/RealiTLScanner"
 CDN_ISSUERS_REGEX='cloudflare|microsoft|apple|amazon|akamai|google|fastly|digicert|sectigo'
 
 # Fallback CDN-edge SNIs probed if neighbor scan finds nothing.
+# amazon.com is preferred over cloudflare.com because RU DPI specifically
+# fingerprints SNI=cloudflare on non-Cloudflare-AS IPs (favorite of low-effort
+# proxies). amazon.com / microsoft.com look more like benign CDN traffic from
+# random VPS IPs.
 FALLBACK_SNIS=(
-  "www.cloudflare.com"
+  "www.amazon.com"
   "www.microsoft.com"
   "swdlp.apple.com"
   "gateway.icloud.com"
+  "www.cloudflare.com"
   "update.microsoft.com"
   "www.bing.com"
 )
@@ -524,6 +529,10 @@ write_xray_config() {
       "streamSettings": {
         "network": "tcp",
         "security": "reality",
+        "tcpSettings": {
+          "acceptProxyProtocol": false,
+          "header": { "type": "none" }
+        },
         "realitySettings": {
           "show": false,
           "dest": "${REALITY_SNI}:443",
@@ -533,7 +542,7 @@ write_xray_config() {
           "shortIds": ${short_ids_json}
         }
       },
-      "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] }
+      "sniffing": { "enabled": false, "destOverride": ["http", "tls", "quic"] }
     }
   ],
   "outbounds": [
