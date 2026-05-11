@@ -154,11 +154,14 @@ handle_existing_install() {
 
 wipe_existing() {
   log "Wiping existing Marzban installation"
+  # marzban uninstall is interactive (asks twice: confirm, then remove data files).
+  # The upstream CLI has no -y flag — feed it answers via stdin.
   if command -v marzban >/dev/null; then
-    marzban down 2>/dev/null || true
-    marzban uninstall -y 2>/dev/null || true
+    marzban down >/dev/null 2>&1 || true
+    printf 'y\ny\n' | marzban uninstall >/dev/null 2>&1 || true
   fi
-  rm -rf "$MARZBAN_DIR" "$CERT_DIR" "$OUTPUT_FILE"
+  # Belt-and-braces: remove everything ourselves in case the CLI bailed early.
+  rm -rf "$MARZBAN_DIR" "$CERT_DIR" "$OUTPUT_FILE" /var/lib/marzban /usr/local/bin/marzban
   ok "Wipe complete"
 }
 
