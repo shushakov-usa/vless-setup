@@ -12,7 +12,7 @@ set -euo pipefail
 SCRIPT_NAME="vless-setup"
 MARZBAN_DIR="/opt/marzban"
 MARZBAN_ENV="${MARZBAN_DIR}/.env"
-MARZBAN_XRAY_JSON="${MARZBAN_DIR}/xray_config.json"
+MARZBAN_XRAY_JSON="/var/lib/marzban/xray_config.json"  # inside compose's volume mount
 CERT_DIR="/etc/marzban-cert"
 CERT_FILE="${CERT_DIR}/server.crt"
 KEY_FILE="${CERT_DIR}/server.key"
@@ -495,6 +495,11 @@ generate_reality_keys() {
 
 write_xray_config() {
   log "Writing $MARZBAN_XRAY_JSON"
+  # MARZBAN_XRAY_JSON lives under /var/lib/marzban, which is the only host path
+  # mounted into the marzban container (compose mounts /var/lib/marzban:/var/lib/marzban).
+  # The path must be identical inside and outside the container so .env's XRAY_JSON
+  # resolves correctly for both Marzban (in-container) and our jq reads (on host).
+  mkdir -p "$(dirname "$MARZBAN_XRAY_JSON")"
   local short_ids_json
   short_ids_json="$(printf '"%s",' "${REALITY_SHORT_IDS[@]}")"
   short_ids_json="[${short_ids_json%,}]"
