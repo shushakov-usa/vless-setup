@@ -575,10 +575,13 @@ restart_marzban_and_wait() {
     tail -n 40 "$restart_log" >&2
     die "Restart failed. Full log: $restart_log"
   fi
+  # Marzban serves its API at /api/ regardless of DASHBOARD_PATH —
+  # that env var only prefixes the dashboard UI mount.
+  local api_base="https://127.0.0.1:${PANEL_PORT}/api"
   local i last_curl=""
   for i in $(seq 1 30); do
     last_curl="$(curl -sk --max-time 2 -w $'\nHTTP_CODE:%{http_code}\n' \
-                  "https://127.0.0.1:${PANEL_PORT}${PANEL_PATH}/api/admin/token" \
+                  "${api_base}/admin/token" \
                   -d "username=${ADMIN_USER}&password=${ADMIN_PASS}" 2>&1)" || true
     if echo "$last_curl" | grep -q access_token; then
       ok "Marzban API responsive (attempt $i)"
@@ -586,7 +589,7 @@ restart_marzban_and_wait() {
     fi
     sleep 2
   done
-  err "Marzban API did not respond on https://127.0.0.1:${PANEL_PORT}${PANEL_PATH}/api/admin/token within 60s."
+  err "Marzban API did not respond on ${api_base}/admin/token within 60s."
   err "Last curl output:"
   echo "$last_curl" >&2
 
@@ -617,7 +620,8 @@ restart_marzban_and_wait() {
 # ──────────────────────────────────────────────────────────────────────────
 api_token() {
   # Returns the raw JSON response on stdout (caller parses); stderr passes through.
-  curl -sk -X POST "https://127.0.0.1:${PANEL_PORT}${PANEL_PATH}/api/admin/token" \
+  # NOTE: API is always under /api/ — DASHBOARD_PATH does not affect it.
+  curl -sk -X POST "https://127.0.0.1:${PANEL_PORT}/api/admin/token" \
     -d "username=${ADMIN_USER}&password=${ADMIN_PASS}"
 }
 
@@ -627,11 +631,11 @@ create_clients() {
   token_resp="$(api_token)"
   token="$(echo "$token_resp" | jq -r '.access_token // empty' 2>/dev/null)"
   if [[ -z "$token" || "$token" == "null" ]]; then
-    err "Could not obtain admin token from https://127.0.0.1:${PANEL_PORT}${PANEL_PATH}/api/admin/token"
+    err "Could not obtain admin token from https://127.0.0.1:${PANEL_PORT}/api/admin/token"
     err "Username used: ${ADMIN_USER}"
     err "Raw response from Marzban:"
     echo "$token_resp" >&2
-    die "Auth to Marzban API failed. Check ADMIN_USER/ADMIN_PASS in /opt/marzban/.env match what was prompted; check that the panel path '${PANEL_PATH}' matches DASHBOARD_PATH in .env."
+    die "Auth to Marzban API failed. Check that SUDO_USERNAME/SUDO_PASSWORD in /opt/marzban/.env match the credentials that were prompted."
   fi
 
   for name in "${CLIENT_NAMES[@]}"; do
@@ -645,7 +649,7 @@ create_clients() {
       status: "active"
     }')
     local resp
-    resp="$(curl -sk -X POST "https://127.0.0.1:${PANEL_PORT}${PANEL_PATH}/api/user" \
+    resp="$(curl -sk -X POST "https://127.0.0.1:${PANEL_PORT}/api/user" \
               -H "Authorization: Bearer ${token}" \
               -H "Content-Type: application/json" \
               -d "$body")"
