@@ -531,10 +531,20 @@ generate_reality_keys() {
     echo "------------------------------" >&2
     die "Expected lines starting with 'Private key:' and 'Public key:' (or legacy 'PrivateKey:'/'Password:')"
   fi
+  # 8 short IDs of varying lengths — server accepts any of them. The vless
+  # link advertises ONE specific shortId to the client; we pick a mid-length
+  # (8 hex chars / 4 bytes) entry because 1-byte shortIds like "ff" are
+  # mangled or false-matched on hostile networks (observed: empty/short
+  # session_id fields get rewritten by some DPI middleboxes, and Reality
+  # server fails to recognize → "REALITY: processed invalid connection"
+  # on the client).
   REALITY_SHORT_IDS=()
   for n in 2 4 6 8 10 12 14 16; do
     REALITY_SHORT_IDS+=("$(openssl rand -hex $((n/2)))")
   done
+  # Default sid in the link is index 3 = 8 hex chars (4 bytes) — same length
+  # class Finland 3x-ui's working setup uses ("b5fe883e", etc).
+  REALITY_DEFAULT_SHORT_ID_INDEX=3
   ok "x25519 keypair generated; 8 short IDs"
 }
 
@@ -712,8 +722,9 @@ create_clients() {
 
 build_vless_url() {
   local name="$1" uuid="$2"
+  local sid="${REALITY_SHORT_IDS[${REALITY_DEFAULT_SHORT_ID_INDEX:-0}]}"
   printf 'vless://%s@%s:443?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&sni=%s&fp=chrome&pbk=%s&sid=%s#%s\n' \
-    "$uuid" "$SERVER_IP" "$REALITY_SNI" "$REALITY_PUBLIC_KEY" "${REALITY_SHORT_IDS[0]}" "$name"
+    "$uuid" "$SERVER_IP" "$REALITY_SNI" "$REALITY_PUBLIC_KEY" "$sid" "$name"
 }
 
 # ──────────────────────────────────────────────────────────────────────────
