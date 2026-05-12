@@ -347,15 +347,35 @@ select_reality_sni() {
 
   [[ -n "$probed" ]] || die "No candidate SNI handshakes succeeded; check server connectivity."
 
+  # Deprioritise SNIs that RU/IR DPI specifically fingerprints when seen on
+  # non-CDN-AS IPs. Cloudflare is the favorite SNI of low-effort proxies, so
+  # DPI middleboxes drop or reset connections that claim SNI=www.cloudflare.com
+  # while terminating on an IP that doesn't belong to Cloudflare's AS. These
+  # SNIs still WORK as a manual choice — but they should never become the
+  # automatic [1] default.
+  local DPI_RISKY_SNIS="www.cloudflare.com cloudflare.com cdnjs.cloudflare.com www.icloud.com"
+  local risky=""
+  local clean=""
+  while read -r rtt sni; do
+    [[ -z "$sni" ]] && continue
+    if [[ " $DPI_RISKY_SNIS " == *" $sni "* ]]; then
+      risky+="$rtt $sni"$'\n'
+    else
+      clean+="$rtt $sni"$'\n'
+    fi
+  done <<<"$(echo "$probed" | sort -n)"
+
   local sorted
-  sorted="$(echo "$probed" | sort -n | head -n 5)"
+  sorted="$(printf '%s%s' "$clean" "$risky" | head -n 5)"
   echo
-  echo "  Top SNI candidates (latency  domain):"
+  echo "  Top SNI candidates (latency  domain — DPI-risky entries are pushed to the bottom):"
   local idx=1
   declare -a top_snis=()
   while read -r rtt sni; do
     [[ -z "$sni" ]] && continue
-    printf "  ${C_BOLD}%d)${C_RESET} %4d ms  %s\n" "$idx" "$rtt" "$sni"
+    local marker=""
+    [[ " $DPI_RISKY_SNIS " == *" $sni "* ]] && marker="  ${C_YEL}(DPI-risky on non-CDN IPs)${C_RESET}"
+    printf "  ${C_BOLD}%d)${C_RESET} %4d ms  %s%s\n" "$idx" "$rtt" "$sni" "$marker"
     top_snis+=("$sni")
     idx=$((idx+1))
   done <<<"$sorted"
