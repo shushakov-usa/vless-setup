@@ -274,7 +274,8 @@ check_ports() {
 download_realitlscanner() {
   if [[ ! -x "$REALITLSCANNER_BIN" ]]; then
     log "Downloading RealiTLScanner"
-    curl -sfL "$REALITLSCANNER_URL" -o "$REALITLSCANNER_BIN.tmp" \
+    curl -fsSL -m 60 --retry 5 --retry-delay 2 --retry-all-errors \
+        "$REALITLSCANNER_URL" -o "$REALITLSCANNER_BIN.tmp" \
       || die "Failed to download RealiTLScanner from $REALITLSCANNER_URL"
     chmod +x "$REALITLSCANNER_BIN.tmp"
     mv "$REALITLSCANNER_BIN.tmp" "$REALITLSCANNER_BIN"
@@ -401,9 +402,16 @@ install_marzban() {
   # Stream its output to a file, watch for the startup-complete line, then kill
   # the entire process group (installer + child docker-compose-logs).
   local log_file="/root/${SCRIPT_NAME}-marzban-install.log"
+  # Retry on intermittent TLS / network errors fetching from GitHub —
+  # raw curl without --retry has been observed to return exit 35 (SSL_CONNECT_ERROR)
+  # at random ~5% of the time on some routes, which then trips `set -e`.
   local installer_src
-  installer_src="$(curl -sL https://github.com/Gozargah/Marzban-scripts/raw/master/marzban.sh)"
-  [[ -n "$installer_src" ]] || die "Could not fetch Marzban installer."
+  installer_src="$(curl -fsSL -m 30 \
+                    --retry 5 --retry-delay 2 \
+                    --retry-connrefused --retry-all-errors \
+                    "https://raw.githubusercontent.com/Gozargah/Marzban-scripts/master/marzban.sh")" \
+    || die "Could not fetch Marzban installer from raw.githubusercontent.com after retries."
+  [[ -n "$installer_src" ]] || die "Marzban installer fetch returned empty body."
 
   : >"$log_file"
   setsid bash -c "$installer_src" @ install >>"$log_file" 2>&1 &
