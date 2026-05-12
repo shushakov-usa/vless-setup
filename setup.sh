@@ -422,9 +422,17 @@ install_marzban() {
 
   local waited=0
   local deadline=600   # 10 minutes; covers slow apt/docker pulls
+  local startup_seen=0
   while (( waited < deadline )); do
-    if grep -q "Application startup complete" "$log_file" 2>/dev/null; then
+    # The upstream installer prints "Application startup complete" via container
+    # logs, then installs /usr/local/bin/marzban as one of its LAST steps. If we
+    # kill the pgroup immediately on the first marker we sometimes catch it
+    # mid-CLI-install and leave a 0-byte binary behind. Wait for BOTH markers.
+    if (( startup_seen == 0 )) && grep -q "Application startup complete" "$log_file" 2>/dev/null; then
       ok "Marzban application startup complete"
+      startup_seen=1
+    fi
+    if (( startup_seen == 1 )) && [[ -s /usr/local/bin/marzban ]]; then
       kill -TERM "-$pgid" 2>/dev/null || true
       sleep 2
       kill -KILL "-$pgid" 2>/dev/null || true
@@ -446,7 +454,7 @@ install_marzban() {
     die "See full log at $log_file"
   fi
 
-  command -v marzban >/dev/null || die "Marzban CLI not found after install. See $log_file"
+  [[ -s /usr/local/bin/marzban ]] || die "Marzban CLI not installed (or 0-byte). See $log_file"
   docker ps --format '{{.Names}}' | grep -q '^marzban-marzban-1$' \
     || die "marzban container is not running. See $log_file"
   ok "Marzban installed (full log: $log_file)"
@@ -577,9 +585,14 @@ EOF
 restart_marzban_and_wait() {
   log "Restarting Marzban + waiting for API"
   local restart_log="/root/${SCRIPT_NAME}-marzban-restart.log"
-  # -n / --no-logs: don't follow docker compose logs forever after restart.
-  if ! marzban restart -n >"$restart_log" 2>&1; then
-    err "'marzban restart' returned non-zero. Output:"
+  # `docker compose restart` does NOT re-read .env (env is baked at create time),
+  # so any UVICORN_SSL_* / UVICORN_HOST changes we just wrote would be ignored.
+  # Use `up -d --force-recreate` to recreate the container with the new env.
+  # Also: the upstream `marzban` CLI is sometimes a 0-byte file when the installer
+  # was killed mid-install — going direct to docker compose avoids relying on it.
+  if ! docker compose -f "${MARZBAN_DIR}/docker-compose.yml" \
+        --env-file "${MARZBAN_ENV}" up -d --force-recreate >"$restart_log" 2>&1; then
+    err "'docker compose up -d --force-recreate' returned non-zero. Output:"
     tail -n 40 "$restart_log" >&2
     die "Restart failed. Full log: $restart_log"
   fi
