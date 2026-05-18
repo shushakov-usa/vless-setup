@@ -374,7 +374,7 @@ select_reality_sni() {
   while read -r rtt sni; do
     [[ -z "$sni" ]] && continue
     local marker=""
-    [[ " $DPI_RISKY_SNIS " == *" $sni "* ]] && marker="  ${C_YEL}(DPI-risky on non-CDN IPs)${C_RESET}"
+    [[ " $DPI_RISKY_SNIS " == *" $sni "* ]] && marker="  ${C_YLW}(DPI-risky on non-CDN IPs)${C_RESET}"
     printf "  ${C_BOLD}%d)${C_RESET} %4d ms  %s%s\n" "$idx" "$rtt" "$sni" "$marker"
     top_snis+=("$sni")
     idx=$((idx+1))
